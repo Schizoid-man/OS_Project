@@ -6,11 +6,18 @@
 #include <arpa/inet.h>
 #include <time.h>
 #include <sys/types.h>
+#include <pthread.h>
 
+// If PORT is not defined through compiler flags, use default
+#ifndef PORT
 #define PORT 8080
+#endif
+
 #define BUFFER_SIZE 1024
+#define LOG_FILE "clients.log"
 
 const char* words[] = {"apple", "banana", "cherry", "dragon", "elephant"};
+pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 void get_timestamp(char* buffer, size_t size) {
     time_t now = time(NULL);
@@ -18,26 +25,40 @@ void get_timestamp(char* buffer, size_t size) {
     strftime(buffer, size, "%Y-%m-%d %H:%M:%S", t);
 }
 
-void write_log(FILE* log, const char* state, pid_t pid, const char* req, const char* res) {
+void write_log(const char* state, pid_t pid, const char* req, const char* res) {
+    pthread_mutex_lock(&log_mutex);
+    FILE* log = fopen(LOG_FILE, "a");
+    if (!log) {
+        perror("Log open failed");
+        pthread_mutex_unlock(&log_mutex);
+        return;
+    }
+
     char timestamp[64];
     get_timestamp(timestamp, sizeof(timestamp));
 
     fprintf(log, "[%s] [PID %d] [%s] Request: %s | Response: %s\n",
             timestamp, pid, state, req, res);
     fflush(log);
+    fclose(log);
+    pthread_mutex_unlock(&log_mutex);
 }
 
 int main(int argc, char* argv[]) {
     srand(time(NULL) ^ getpid());
     pid_t pid = getpid();
 
-    char log_filename[64];
-    snprintf(log_filename, sizeof(log_filename), "client_%d.log", pid);
-    FILE* log = fopen(log_filename, "w");
-    if (!log) {
-        perror("Log open failed");
-        exit(1);
+    // Make sure log exists (create if first process)
+    static pthread_mutex_t init_mutex = PTHREAD_MUTEX_INITIALIZER;
+    pthread_mutex_lock(&init_mutex);
+    if (access(LOG_FILE, F_OK) != 0) {
+        FILE* log = fopen(LOG_FILE, "w");
+        if (log) {
+            fprintf(log, "=== Client Logs Started (connecting to port %d) ===\n", PORT);
+            fclose(log);
+        }
     }
+    pthread_mutex_unlock(&init_mutex);
 
     const char* word;
     if (argc > 1) {
@@ -47,7 +68,7 @@ int main(int argc, char* argv[]) {
         word = words[rand() % 5]; // fallback
     }
 
-    write_log(log, "INIT", pid, word, "-");
+    write_log("INIT", pid, word, "-");
 
     int sock;
     struct sockaddr_in serv_addr;
@@ -56,8 +77,7 @@ int main(int argc, char* argv[]) {
     sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock < 0) {
         perror("Socket creation failed");
-        write_log(log, "ERROR_SOCKET", pid, word, "-");
-        fclose(log);
+        write_log("ERROR_SOCKET", pid, word, "-");
         exit(1);
     }
 
@@ -65,23 +85,21 @@ int main(int argc, char* argv[]) {
     serv_addr.sin_port = htons(PORT);
     inet_pton(AF_INET, "127.0.0.1", &serv_addr.sin_addr);
 
-    write_log(log, "CONNECTING", pid, word, "-");
+    write_log("CONNECTING", pid, word, "-");
 
     if (connect(sock, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) < 0) {
         perror("Connect failed");
-        write_log(log, "ERROR_CONNECT", pid, word, "-");
+        write_log("ERROR_CONNECT", pid, word, "-");
         close(sock);
-        fclose(log);
         exit(1);
     }
 
-    write_log(log, "SENDING", pid, word, "-");
+    write_log("SENDING", pid, word, "-");
 
     if (write(sock, word, strlen(word)) < 0) {
         perror("Write failed");
-        write_log(log, "ERROR_SEND", pid, word, "-");
+        write_log("ERROR_SEND", pid, word, "-");
         close(sock);
-        fclose(log);
         exit(1);
     }
 
@@ -89,19 +107,17 @@ int main(int argc, char* argv[]) {
     ssize_t received = read(sock, buffer, BUFFER_SIZE - 1);
     if (received < 0) {
         perror("Read failed");
-        write_log(log, "ERROR_RECEIVE", pid, word, "-");
+        write_log("ERROR_RECEIVE", pid, word, "-");
         close(sock);
-        fclose(log);
         exit(1);
     }
 
     buffer[received] = '\0';
-    write_log(log, "RECEIVED", pid, word, buffer);
+    write_log("RECEIVED", pid, word, buffer);
 
     printf("[Client PID %d] Sent: %s | Received: %s\n", pid, word, buffer);
     fflush(stdout);
 
     close(sock);
-    fclose(log);
     return 0;
 }
