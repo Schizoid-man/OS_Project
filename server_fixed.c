@@ -1,4 +1,4 @@
-// server_fixed_semaphore.c
+// server_fixed.c (with semaphore)
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,9 +12,10 @@
 
 #define PORT 8080
 #define BUFFER_SIZE 1024
-#define LOG_FILE "server_fixed_semaphore.log"
+#define LOG_FILE "server_fixed.log"
 
-sem_t log_semaphore; // Semaphore for logging
+pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
+sem_t client_sem;  // Semaphore for client critical sections
 
 void get_timestamp(char* buffer, size_t size) {
     time_t now = time(NULL);
@@ -23,11 +24,11 @@ void get_timestamp(char* buffer, size_t size) {
 }
 
 void write_log(const char* state, pid_t pid, pid_t tid, const char* req, const char* res) {
-    sem_wait(&log_semaphore);
+    pthread_mutex_lock(&log_mutex);
     FILE* log = fopen(LOG_FILE, "a");
     if (!log) {
         perror("Failed to open log file");
-        sem_post(&log_semaphore);
+        pthread_mutex_unlock(&log_mutex);
         return;
     }
     char timestamp[64];
@@ -35,7 +36,7 @@ void write_log(const char* state, pid_t pid, pid_t tid, const char* req, const c
     fprintf(log, "[%s] [TID %d] [PID %d] [%s] Request: %s | Response: %s\n",
             timestamp, tid, pid, state, req, res);
     fclose(log);
-    sem_post(&log_semaphore);
+    pthread_mutex_unlock(&log_mutex);
 }
 
 void reverse_string(char* str) {
@@ -57,14 +58,18 @@ void* handle_client(void* arg) {
     memset(local_buffer, 0, BUFFER_SIZE);
     write_log("CONNECTED", pid, tid, "-", "-");
 
+    // Start of critical section
+    sem_wait(&client_sem);
+
     ssize_t bytes_read = read(client_socket, local_buffer, BUFFER_SIZE - 1);
     if (bytes_read <= 0) {
+        sem_post(&client_sem);
         close(client_socket);
         return NULL;
     }
     local_buffer[bytes_read] = '\0';
 
-    usleep(50000); // Optional: mimic same timing as broken version
+    usleep(50000);
 
     write_log("RECEIVED", pid, tid, local_buffer, "-");
 
@@ -76,6 +81,9 @@ void* handle_client(void* arg) {
     write(client_socket, response, strlen(response));
     write_log("RESPONDED", pid, tid, local_buffer, response);
 
+    // End of critical section
+    sem_post(&client_sem);
+
     close(client_socket);
     return NULL;
 }
@@ -86,11 +94,8 @@ int main() {
     int addrlen = sizeof(address);
     pid_t pid = getpid();
 
-    // Initialize the semaphore
-    if (sem_init(&log_semaphore, 0, 1) != 0) {
-        perror("Semaphore init failed");
-        exit(1);
-    }
+    // Initialize semaphore to 1 (like mutex)
+    sem_init(&client_sem, 0, 1);
 
     server_fd = socket(AF_INET, SOCK_STREAM, 0);
     address.sin_family = AF_INET;
@@ -100,11 +105,11 @@ int main() {
     bind(server_fd, (struct sockaddr*)&address, sizeof(address));
     listen(server_fd, 20);
 
-    printf("[Main PID %d] ✅ FIXED Server with SEMAPHORE listening on port %d...\n", pid, PORT);
+    printf("[Main PID %d] ✅ FIXED Server with semaphore listening on port %d...\n", pid, PORT);
 
     FILE* log = fopen(LOG_FILE, "w");
     if (log) {
-        fprintf(log, "=== FIXED Server (Semaphore) Started at PID %d ===\n", pid);
+        fprintf(log, "=== FIXED Server Started at PID %d ===\n", pid);
         fclose(log);
     }
 
@@ -118,6 +123,6 @@ int main() {
     }
 
     close(server_fd);
-    sem_destroy(&log_semaphore); // Clean up the semaphore
+    sem_destroy(&client_sem);
     return 0;
 }
