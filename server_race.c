@@ -9,6 +9,7 @@
 #include <sys/syscall.h>
 #include <time.h>
 
+// Hardcoded port for race server
 #define PORT 8080
 #define BUFFER_SIZE 1024
 #define LOG_FILE "server_race.log"
@@ -33,7 +34,8 @@ void write_log(const char* state, pid_t pid, pid_t tid, const char* req, const c
     char timestamp[64];
     get_timestamp(timestamp, sizeof(timestamp));
     fprintf(log, "[%s] [TID %d] [PID %d] [%s] Request: %s | Response: %s\n",
-            timestamp, tid, pid, state, req, res);
+            timestamp, (int)tid, (int)pid, state, req ? req : "-", res ? res : "-");
+    fflush(log); // Ensure data is written to disk
     fclose(log);
     pthread_mutex_unlock(&log_mutex);
 }
@@ -51,20 +53,21 @@ void* handle_client(void* arg) {
     int client_socket = *(int*)arg;
     free(arg);
     pid_t pid = getpid();
-    pid_t tid = syscall(SYS_gettid);
+    pid_t tid = (pid_t)pthread_self(); // Use pthread_self instead of syscall for better macOS compatibility
 
     memset(shared_buffer, 0, BUFFER_SIZE);
     write_log("CONNECTED", pid, tid, "-", "-");
 
     ssize_t bytes_read = read(client_socket, shared_buffer, BUFFER_SIZE - 1);
     if (bytes_read <= 0) {
+        write_log("ERROR_READ", pid, tid, "-", "-");
         close(client_socket);
         return NULL;
     }
     shared_buffer[bytes_read] = '\0';
 
-    // 🧯 Force threads to overlap
-    usleep(50000);  // 50ms
+    // Add delay to make race conditions more likely
+    usleep(100000);  // 100ms delay
 
     write_log("RECEIVED", pid, tid, shared_buffer, "-");
 
@@ -86,28 +89,68 @@ int main() {
     int addrlen = sizeof(address);
     pid_t pid = getpid();
 
+    // Initialize log file
+    FILE* log = fopen(LOG_FILE, "w");
+    if (!log) {
+        perror("Failed to create log file");
+        exit(1);
+    }
+    char timestamp[64];
+    get_timestamp(timestamp, sizeof(timestamp));
+    fprintf(log, "=== RACE Server Started at PID %d (%s) on PORT %d ===\n", pid, timestamp, PORT);
+    fflush(log);
+    fclose(log);
+
     server_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (server_fd < 0) {
+        perror("Socket creation failed");
+        exit(1);
+    }
+    
+    // Allow socket reuse to avoid "address already in use" errors
+    int opt = 1;
+    if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
+        perror("setsockopt failed");
+        exit(1);
+    }
+
     address.sin_family = AF_INET;
     address.sin_addr.s_addr = INADDR_ANY;
     address.sin_port = htons(PORT);
 
-    bind(server_fd, (struct sockaddr*)&address, sizeof(address));
-    listen(server_fd, 20);
+    if (bind(server_fd, (struct sockaddr*)&address, sizeof(address)) < 0) {
+        perror("Bind failed");
+        exit(1);
+    }
+    
+    if (listen(server_fd, 20) < 0) {
+        perror("Listen failed");
+        exit(1);
+    }
 
     printf("[Main PID %d] 🔥 RACE Server listening on port %d...\n", pid, PORT);
 
-    FILE* log = fopen(LOG_FILE, "w");
-    if (log) {
-        fprintf(log, "=== RACE Server Started at PID %d ===\n", pid);
-        fclose(log);
-    }
-
     while (1) {
         new_socket = accept(server_fd, (struct sockaddr*)&address, (socklen_t*)&addrlen);
+        if (new_socket < 0) {
+            perror("Accept failed");
+            continue;
+        }
+        
         int* pclient = malloc(sizeof(int));
+        if (!pclient) {
+            close(new_socket);
+            continue;
+        }
+        
         *pclient = new_socket;
         pthread_t t;
-        pthread_create(&t, NULL, handle_client, pclient);
+        if (pthread_create(&t, NULL, handle_client, pclient) != 0) {
+            perror("Thread creation failed");
+            free(pclient);
+            close(new_socket);
+            continue;
+        }
         pthread_detach(t);
     }
 
