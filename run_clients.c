@@ -1,3 +1,4 @@
+// run_clients.c
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -11,13 +12,11 @@ int main() {
         pid_t pid = fork();
 
         if (pid == 0) {
-            // Child process
             printf("Client #%d (PID %d) executing ./client with argument %d\n", i + 1, getpid(), i);
             char index_arg[4];
             snprintf(index_arg, sizeof(index_arg), "%d", i);
             char *args[] = {"./client", index_arg, NULL};
             execv(args[0], args);
-            // If execv fails
             perror("execv failed");
             exit(1);
         } else if (pid < 0) {
@@ -26,7 +25,6 @@ int main() {
         }
     }
 
-    // Parent waits for all children
     for (int i = 0; i < NUM_CLIENTS; i++) {
         wait(NULL);
     }
