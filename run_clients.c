@@ -4,7 +4,7 @@
 #include <unistd.h>
 #include <sys/wait.h>
 
-#define NUM_CLIENTS 5
+#define NUM_CLIENTS 100
 
 int main() {
     for (int i = 0; i < NUM_CLIENTS; i++) {
