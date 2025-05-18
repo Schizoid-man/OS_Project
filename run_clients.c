@@ -4,7 +4,7 @@
 #include <unistd.h>
 #include <sys/wait.h>
 
-#define NUM_CLIENTS 100
+#define NUM_CLIENTS 10
 
 int main() {
     for (int i = 0; i < NUM_CLIENTS; i++) {
@@ -29,6 +29,6 @@ int main() {
         wait(NULL);
     }
 
-    printf("✅ All clients have completed.\n");
+    printf("######################### All clients have completed. #########################\n");
     return 0;
 }
