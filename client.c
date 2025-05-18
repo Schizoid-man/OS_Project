@@ -16,7 +16,7 @@
 #define BUFFER_SIZE 1024
 #define LOG_FILE "clients.log"
 
-const char* words[] = {"apple", "banana", "cherry", "dragon", "elephant"};
+const char* words[] = {"apple", "loss", "cherry", "dragon", "win"};
 pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 void get_timestamp(char* buffer, size_t size) {
