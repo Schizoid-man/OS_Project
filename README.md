@@ -54,3 +54,5 @@ When running the test script:
 - The fixed server should produce correct results (each client gets the correct reversed word)
 
 The script analyzes logs to detect if race conditions occurred during the run by checking if there are duplicate responses, which would indicate that multiple client requests were processed incorrectly. 
+
+Update: Project was presented on 9/6/2025
